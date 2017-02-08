@@ -18,62 +18,62 @@ endfunction
 
 " Execute the command. If we get an empty response, keep trying to execute until
 " we get a non-empty response or hit the max number of tries.
-function importjs#TryExecPayload(payload, tryCount)
-  if (a:tryCount > 3)
-    echoerr "No response from `importjs` after " . a:tryCount . " tries"
-    return
-  endif
-
-  let resultString = ch_evalraw(g:ImportJSChannel, json_encode(a:payload) . "\n")
-  if (resultString != "")
-    return resultString
-  endif
-
-  " We got no response, which probably means that importjsd hasn't had enough
-  " time to start up yet. Let's wait a little and try again.
-  sleep 100m
-  return importjs#TryExecPayload(a:payload, a:tryCount + 1)
-endfunction
+" function importjs#TryExecPayload(payload, tryCount)
+"   if (a:tryCount > 3)
+"     echoerr "No response from `importjs` after " . a:tryCount . " tries"
+"     return
+"   endif
+"
+"   let resultString = async#job#send(s:job, json_encode(a:payload) . "\n")
+"   if (resultString != "")
+"     return resultString
+"   endif
+"
+"   " We got no response, which probably means that importjsd hasn't had enough
+"   " time to start up yet. Let's wait a little and try again.
+"   sleep 100m
+"   return importjs#TryExecPayload(a:payload, a:tryCount + 1)
+" endfunction
 
 function importjs#ExecCommand(command, arg)
-  let fileContent = join(getline(1, '$'), "\n")
+  let s:fileContent = join(getline(1, '$'), "\n")
   let payload = {
     \'command': a:command,
     \'commandArg': a:arg,
     \'pathToFile': expand("%"),
-    \'fileContent': fileContent,
+    \'fileContent': s:fileContent,
   \}
 
   try
-    let resultString = importjs#TryExecPayload(payload, 0)
+    call async#job#send(s:job, json_encode(payload) . "\n")
   catch /E906:/
     " channel not open
     echoerr "importjsd process not running"
     return
   endtry
 
-  let result = json_decode(resultString)
-
-  if (has_key(result, 'error'))
-    echoerr result.error
-    return
-  endif
-
-  if (a:command == "goto" && has_key(result, 'goto'))
-    execute "edit " . result.goto
-    return
-  endif
-
-  if (result.fileContent != fileContent)
-    call importjs#ReplaceBuffer(result.fileContent)
-  endif
-
-  if (has_key(result, 'messages') && len(result.messages))
-    call importjs#Msg(join(result.messages, "\n"))
-  endif
-  if (has_key(result, 'unresolvedImports') && len(result.unresolvedImports))
-    call importjs#Resolve(result.unresolvedImports)
-  endif
+  " let result = json_decode(resultString)
+  "
+  " if (has_key(result, 'error'))
+  "   echoerr result.error
+  "   return
+  " endif
+  "
+  " if (a:command == "goto" && has_key(result, 'goto'))
+  "   execute "edit " . result.goto
+  "   return
+  " endif
+  "
+  " if (result.fileContent != fileContent)
+  "   call importjs#ReplaceBuffer(result.fileContent)
+  " endif
+  "
+  " if (has_key(result, 'messages') && len(result.messages))
+  "   call importjs#Msg(join(result.messages, "\n"))
+  " endif
+  " if (has_key(result, 'unresolvedImports') && len(result.unresolvedImports))
+  "   call importjs#Resolve(result.unresolvedImports)
+  " endif
 endfunction
 
 function importjs#Resolve(unresolvedImports)
@@ -133,12 +133,38 @@ function! importjs#JobExit(job, exitstatus)
   endif
 endfun
 
+function! importjs#handler(job_id, data, event_type)
+  let result = json_decode(a:data)
+
+  if (has_key(result, 'error'))
+    echoerr result.error
+    return
+  endif
+
+  " if (a:command == "goto" && has_key(result, 'goto'))
+  "   execute "edit " . result.goto
+  "   return
+  " endif
+
+  if (result.fileContent != s:fileContent)
+    call importjs#ReplaceBuffer(result.fileContent)
+  endif
+
+  if (has_key(result, 'messages') && len(result.messages))
+    call importjs#Msg(join(result.messages, "\n"))
+  endif
+  if (has_key(result, 'unresolvedImports') && len(result.unresolvedImports))
+    call importjs#Resolve(result.unresolvedImports)
+  endif
+    " echo a:job_id . ' ' . a:event_type
+    " echo join(a:data, "\n")
+endfunction
+
 function! importjs#Init()
    " Include the PID of the parent (this Vim process) to make `ps` output more
    " useful.
-  let s:job=job_start(['importjsd', 'start', '--parent-pid', getpid()], {
-    \'exit_cb': 'importjs#JobExit',
-  \})
+   let s:job=async#job#start(['importjsd', 'start', '--parent-pid', getpid()], {
+         \ 'on_stdout': function('importjs#handler'),
+         \})
 
-  let g:ImportJSChannel=job_getchannel(s:job)
 endfunction
